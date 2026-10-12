@@ -1,0 +1,1768 @@
+---
+title: "Advanced Exploratory Data Analysis of Telco Customer Churn in R"
+
+author: 
+  - "Alice Davolio"
+  - "Alessandro Lupo"
+  - "Daniele Calabrese"
+  - "Ena Karkelja"
+  - "Ioanna Kyrkoudi"
+  - "Isabela Rule Muñoz"
+
+subtitle: "Group assignment for the course: Data Science Programming Languages and tools (A26_I_DTS_DL_04)"
+
+header-includes:
+  - |
+    \usepackage{titling}
+    \usepackage{graphicx}
+    \usepackage{float}
+    \usepackage{booktabs}
+    \usepackage{longtable}
+    \usepackage{array}
+    \usepackage{geometry}
+    \geometry{a4paper, margin=1in}
+    \posttitle{\end{center}}
+
+output:
+  html_document: 
+    theme: flatly
+  pdf_document:
+    latex_engine: xelatex
+    fig_caption: true
+    keep_tex: true
+editor_options: 
+  markdown: 
+    wrap: 72
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(
+  echo = TRUE,          
+  eval = TRUE,          
+  message = FALSE,      
+  warning = FALSE,      
+  error = FALSE         
+)
+
+# Core Libraries
+library(readxl)
+library(tidyverse)
+library(scales)
+library(knitr)
+library(skimr)
+
+# Shared Global Color Palette
+primary_color   <- "#104E8B"
+secondary_color <- "#E69F00"
+brand_blue      <- "#104E8B"
+```
+
+# 1. Introduction
+
+Customer churn is one of the most critical business metrics for
+subscription-based services, directly impacting long-term revenue and
+customer lifetime value. While introductory analyses typically focus on
+basic demographic splits and broad service adoption rates, understanding
+the nuanced drivers of attrition requires a deeper, multi-dimensional
+investigation. Building upon the foundational concepts introduced during
+the lecture using the IBM Telco Customer Churn dataset, this assignment
+aims to conduct an independent exploratory data analysis (EDA) in R.
+This analysis focuses on relationships specifically investigating the
+interplay between dempgraphic customer segment, complex billing
+mechanisms, contract flexibility, tech support utilization, and customer
+tenure. By defining our own analytical questions, we seek to uncover
+hidden behavioral patterns and risk indicators that can inform more
+targeted retention strategies.
+
+# 2. Dataset
+
+This empirical study utilizes the IBM Telco Customer Churn dataset, a
+benchmark repository comprising $7,043$ individual customer records and
+$33$ structural features. The dataset encompasses four primary
+dimensions of consumer profile data: demographic attributes (such as
+gender, senior status, and household dependents), account and billing
+mechanics (including subscription tenure, contract type, payment method,
+monthly expenditures, and cumulative charges), specific
+telecommunication service subscriptions (such as multi-line telephony
+and digital streaming), and auxiliary internet security add-ons
+(including online backup, device protection, and technical support). The
+primary target variable, `Churn`, is a binary indicator denoting whether
+a subscriber terminated their services within the observed timeframe.
+Consistent with typical telecommunication retail sectors, the dataset
+exhibits moderate class imbalance, wherein approximately $26.5\%$ of the
+customer base accounts for attrition events, establishing a robust
+foundation for investigating multi-variate behavioral patterns and risk
+factors associated with customer retention.
+
+The dataset in use is sourced from Kaggle and the link below: **Telco
+customer churn: IBM dataset**
+
+<https://www.kaggle.com/datasets/yeanzc/telco-customer-churn-ibm-dataset>
+
+For the analysis we used the file `Telco_customer_churn.xlsx`.
+
+# 3. Data Inspection
+
+First, loading the dataset from the .xlsx file, it should be placed it
+in the same directory as this R Markdown file, or should be adapted the
+file path below.
+
+```{r load-data}
+customers <- read_excel(
+  "Telco_customer_churn.xlsx",
+  sheet = "Telco_Churn"
+)
+```
+
+Inspecting the dimensions, variable names, data types and initial
+records.
+
+```{r inspect-data}
+
+nrow(customers)   # Number of observations
+ncol(customers)   # Number of variables
+
+str(customers)    # Shows the structure of the dataset, including variable types and example values
+
+```
+
+Counting the variables according to their imported data types,
+distinguishing numeric columns from categorical columns. This provides
+an initial overview of the dataset structure.
+
+```{r imported-data-type}
+
+# Identify column types as imported
+is_numeric <- vapply(customers, is.numeric, FUN.VALUE = logical(1))
+is_categorical <- vapply(customers, is.character, FUN.VALUE = logical(1))
+
+imported_type_summary <- data.frame(
+  Variable_type = c("Numeric", "Categorical", "Other"),
+  Number_of_variables = c(
+    sum(is_numeric),
+    sum(is_categorical),
+    sum(!is_numeric & !is_categorical)
+  )
+)
+
+imported_type_summary
+
+```
+
+Storage types do not always correspond to analytical roles, in fact ZIP
+codes and binary outcomes as Churn Value are stored as numbers. We
+therefore review variable meanings before selecting descriptive
+statistics and visualizations.
+
+Let's see the first ten rows of the dataset to have a first look on it.
+
+```{r first-rows}
+
+head(customers,10) 
+```
+
+# 4. Data Quality
+
+Before exploring customer characteristics and their relationships with
+churn, we assess data quality by checking for duplicated rows and
+missing values. These checks help us identify potential issues and
+decide whether data preparation is required. Missing values are
+evaluated according to their meaning rather than automatically removing
+all incomplete records.
+
+### 4.1 Duplicates
+
+We check for completely duplicated rows by comparing all columns. If
+duplicates are found, repeated occurrences are removed while retaining
+the first occurrence. This check concerns identical records, not
+repeated customer identifiers with potentially different information.
+
+```{r duplicates}
+
+customers_duplicates <- sum(duplicated(customers))
+
+if (customers_duplicates > 0) {
+  customers <- customers[!duplicated(customers), ]
+  cat(customers_duplicates, "duplicated row(s) removed.")
+} else {
+  cat("No duplicated rows found. No rows were removed.")
+}
+  
+```
+
+### 4.2 Missing values
+
+We count missing values in each variable and calculate their percentage
+relative to the total number of customers. The resulting table is sorted
+in descending order of missing-value count to highlight the most
+affected variables. This provides an initial overview, but the
+appropriate treatment depends on why the information is missing.
+
+```{r missing-values}
+
+customers_na <- colSums(is.na(customers))
+
+na_analysis <- tibble(
+  Variable = names(customers),
+  Missing_values = customers_na,
+  Missing_values_percentage = customers_na / nrow(customers) * 100
+)
+
+cat("Variable(s) with missing values:", paste0(names(customers[customers_na > 0]), collapse = ", "))
+
+na_analysis <- na_analysis |> arrange(desc(Missing_values))
+na_analysis
+```
+
+We investigate missing values in **Total Charge**s and **Churn Reason**
+separately because they have different meanings. Missing total charges
+may relate to newly established customer relationships, whereas a
+missing churn reason may be expected when a customer has not left the
+company.
+
+```{r missing-values-Total-Charges}
+
+customers[is.na(customers["Total Charges"]), 
+          c("CustomerID", "Total Charges", "Tenure Months", "Churn Value", "Churn Label")]
+
+```
+
+The 11 customers with missing total charges all have zero months of
+tenure and are recorded as retained customers. This pattern is
+consistent with newly established customer relationships for which
+cumulative charges may not yet be available. However, it does not
+provide sufficient justification to replace the missing values with
+zero.
+
+We retain these customers in the dataset because information required
+for other analyses, including their churn outcome, is available. For
+calculations involving Total Charges, we exclude missing values only
+from the relevant calculation and report the number of valid
+observations. Removing these customers entirely would also change the
+sample used for churn comparisons.
+
+We examine missing **churn reasons** separately for retained and churned
+customers. For each group, we calculate the number of customers, the
+number of missing reasons and the percentage of missing reasons within
+that group. This distinguishes expected missingness from potentially
+incomplete information about customers who left.
+
+```{r missing-values-Churn-Reason}
+
+customers %>%
+  group_by(`Churn Label`) %>%
+  summarise(
+    Customers = n(),
+    Missing_reason = sum(is.na(`Churn Reason`)),
+    Missing_reason_percentage = sum(is.na(`Churn Reason`)) / n() * 100
+  )
+```
+
+All 5,174 retained customers have a missing churn reason, while all
+1,869 churned customers have a recorded reason. Missingness in this
+variable is therefore structural: customers who remained with the
+company do not have a reason for leaving.
+
+We do not impute these values or remove the corresponding customers.
+Analyses of churn reasons will be restricted to customers who churned,
+while retained customers will remain included in the other analyses.
+
+### 4.3 Identification of variable with zero variance (columns with the same value in all the rows)
+
+Let's identify all the variable with the same value in all observations,
+those variables are not interesting in terms of statistical analysis, so
+we won't analyse them.
+
+```{r zero-variance-vars}
+
+single_value_cols <- customers %>%
+  summarise(across(everything(), ~ n_distinct(.) == 1)) %>%
+  pivot_longer(cols = everything(), names_to = "Variable", values_to = "Single_Value") %>%
+  filter(Single_Value == TRUE)
+
+print(single_value_cols)
+
+```
+
+### 4.4 Validation of the target and visualization
+
+`Churn Value` is used for calculations: 1 means churned and 0 means
+retained. `Churn Label` represents the same outcome in text "Yes" and
+"No".
+
+```{r target-validation}
+
+# Check missing values and valid target categories
+stopifnot(
+  !anyNA(customers$`Churn Label`),
+  !anyNA(customers$`Churn Value`),
+  all(customers$`Churn Label` %in% c("No", "Yes")),
+  all(customers$`Churn Value` %in% c(0, 1))
+)
+
+# Display the correspondence between the two representations
+target_check <- table(
+  Churn_label = customers$`Churn Label`,
+  Churn_value = customers$`Churn Value`
+)
+
+target_check
+```
+
+We summarize the target distribution using customer percentages. This
+establishes the overall observed churn rate and provides a reference for
+subsequent comparisons between customer segments.
+
+```{r target-visualization}
+
+target_summary <- customers |>
+  ungroup() |>
+  count(`Churn Label`, name = "Customers") |>
+  mutate(
+    Percentage = 100 * Customers / sum(Customers)
+  )
+
+plot_churn <- ggplot(target_summary, aes( x = factor(`Churn Label`, levels = c("Yes", "No")), y = Percentage)) +
+  geom_col(fill = "#104E8B", color = "#27445D", alpha = 0.8, width = 0.6,) +
+  geom_text(
+    aes(
+      label = sprintf(
+        "%.1f%%",
+        Percentage,
+        format(Customers, big.mark = ",", trim = TRUE)
+      )
+    ),
+    vjust = -0.5,
+    size = 3.5,
+    fontface = "bold"
+  ) +
+  scale_y_continuous(
+    limits = c(0, 100),
+  ) +
+  labs(
+    title = "Churn Value Distribution (%)",
+    subtitle = "Univariate Analysis of Churn Label",
+    x = "Churned",
+    y = "Customers (%)"
+  ) +
+  theme_minimal() +
+    theme(
+    legend.position = "none",
+    strip.text = element_text(face = "bold", size = 12),
+    panel.grid.major.x = element_blank(),
+    axis.text.y = element_blank(),
+    panel.grid.major.y = element_blank(),
+    panel.grid.minor.y = element_blank(),
+    panel.spacing = unit(1, "lines"),
+    panel.border = element_rect(color = "#DCDCDC", fill = NA, size = 0.5), 
+  )
+
+plot_churn
+```
+
+The chart shows that 26.5% of customers churned, whereas 73.5% remained
+with the company. Retained customers therefore represent the majority
+class. This overall churn rate provides a reference for subsequent
+segment-level comparisons: a segment with a higher rate would exhibit
+above-average observed churn.
+
+# 5. Univariate Analysis
+
+Univariate analysis examines each variable individually. We will isolate
+categorical variables to study their frequencies (via bar charts) and
+numerical variables to analyze their distribution (via histograms).
+Please note that we will exclude any previously identified zero-variance
+variables from this analysis, as well as the 'Customer ID' column since
+it serves as the dataset's unique key.
+
+```{r univariate-vars}
+
+customers_univ <- customers %>% 
+  select(-CustomerID, -Count, -Country, -State)
+
+# Summary with skim function of the dataset select for univariate analysis. Divided in categorical and numerical variables
+
+skim(customers_univ)
+
+```
+
+### 5.2 Demographic customers analysis
+
+We describe gender, senior status, partner status and dependent status.
+These distributions show how common each customer characteristic is;
+they do not yet describe its association with churn. Dependents are not
+necessarily children: they can include other dependent household
+members.
+
+```{r demographic-vars, fig.width= 10, fig.height = 8}
+
+demographic_long <- customers_univ %>% 
+  select(Gender, `Senior Citizen`, Partner, Dependents) %>% 
+  pivot_longer(cols = everything(), names_to = "Variable", values_to = "Value") %>% 
+  mutate(Variable = factor(Variable, levels = c("Gender", "Senior Citizen", "Partner", "Dependents")))
+
+plot_demographic <- ggplot(demographic_long, aes(x = Value, y = after_stat(prop), group = Variable, fill = Value)) +
+  geom_bar(stat = "count", fill = "#104E8B", color = "#27445D", alpha = 0.8, width = 0.6) +
+  geom_text(
+    stat = "count", 
+    aes(label = sprintf("%.1f%%", after_stat(prop) * 100)), 
+    vjust = -0.5, 
+    size = 3.5,
+    fontface = "bold"
+  ) +
+  facet_wrap(~ Variable, scales = "free_x") + 
+  scale_y_continuous(limits = c(0,1)) +
+  labs(
+    title = "Customer Demographic Distribution (%)",
+    subtitle = "Univariate Percentage Analysis of Gender, Senior Citizen, Partner, and Dependents",
+    y = "Percentage of Total Customers",
+    x = ""
+  ) +
+  theme_minimal() +
+  theme(
+    legend.position = "none",
+    strip.text = element_text(face = "bold", size = 12),
+    panel.grid.major.x = element_blank(),
+    axis.text.y = element_blank(),
+    panel.grid.major.y = element_blank(),
+    panel.grid.minor.y = element_blank(),
+    panel.spacing = unit(1, "lines"),
+    panel.border = element_rect(color = "#DCDCDC", fill = NA, size = 0.5), 
+  )
+
+plot_demographic
+```
+
+The demographic panels describe the composition of the customer base
+rather than differences in churn risk. Female customers account for
+49.5% of the sample. Senior citizens represent 16.2%, while 48.3% report
+having a partner and 76.9% report having dependents. Each panel uses the
+full customer sample as its denominator, allowing the relative size of
+the categories to be compared within that demographic characteristic.
+
+### 5.3 Tech services and subscriptions analysis
+
+We describe all the variables related to tech services and
+subscriptions, showing their distribution.
+
+```{r services-vars, fig.width = 10, fig.height = 12}
+services_long <- customers_univ %>% 
+  select(`Phone Service`, `Multiple Lines`, `Internet Service`, `Online Security`, 
+         `Online Backup`, `Device Protection`, `Tech Support`, `Streaming TV`, `Streaming Movies`) %>% 
+  pivot_longer(cols = everything(), names_to = "Variable", values_to = "Value") %>% 
+  mutate(Variable = factor(Variable, levels = c(
+    "Phone Service", "Multiple Lines", "Internet Service", "Online Security", 
+    "Online Backup", "Device Protection", "Tech Support", "Streaming TV", "Streaming Movies"
+  )))
+
+plot_services <- ggplot(services_long, aes(x = Value, y = after_stat(prop), group = Variable, fill = Value)) +
+  geom_bar(stat = "count", fill = "#104E8B", color = "#27445D", alpha = 0.8, width = 0.6) +
+  geom_text(
+    stat = "count", 
+    aes(label = sprintf("%.1f%%", after_stat(prop) * 100)),     vjust = -0.5, 
+    size = 3.5,
+    fontface = "bold"
+  ) +
+  facet_wrap(~ Variable, scales = "free_x", ncol = 3) + 
+  scale_y_continuous(limits = c(0,1)) +
+  labs(
+    title = "Customer Services and Subscriptions Distribution (%)",
+    subtitle = "Univariate Percentage Analysis",
+    y = "Percentage of Total Customers",
+    x = ""
+  ) +
+ theme_minimal() +
+  theme(
+    legend.position = "none",
+    panel.grid.major.x = element_blank(),
+    axis.text.y = element_blank(),
+    panel.grid.major.y = element_blank(),
+    panel.grid.minor.y = element_blank(),
+    panel.spacing = unit(1, "lines"),
+    panel.border = element_rect(color = "#DCDCDC", fill = NA, size = 0.5)
+  )
+
+plot_services
+```
+
+Phone service is subscribed to by 90.3% of customers. The
+internet-service panel separates fiber-optic, DSL and no-internet
+customers, while the remaining panels describe the adoption of
+additional services. The distinction between "No" and "No internet
+service" is essential: the former indicates that the customer does not
+subscribe to the specific add-on, whereas the latter indicates that the
+underlying internet service is absent. Likewise, "No phone service" in
+the Multiple Lines panel should not be interpreted as a decision to
+reject an additional telephone line. The percentages shown are
+calculated across all customers.
+
+### 5.4 Contract Profile Analysis
+
+We analyse the distribution of contract type.
+
+```{r contract-var}
+
+contract_long <- customers_univ %>% 
+  select(Contract) %>% 
+  pivot_longer(cols = everything(), names_to = "Variable", values_to = "Value")
+
+plot_contract <- ggplot(contract_long, aes(x = Value, y = after_stat(prop), group = Variable)) +
+  geom_bar(stat = "count", fill = "#104E8B", color = "#27445D", alpha = 0.8, width = 0.6) +
+  geom_text(
+    stat = "count", 
+    aes(label = sprintf("%.1f%%", after_stat(prop) * 100)), 
+    vjust = -0.5, 
+    size = 3.5,
+    fontface = "bold"
+  ) +
+  facet_wrap(~ Variable, scales = "free_x", ncol = 1) + 
+  scale_y_continuous(limits = c(0, 0.8)) +
+  labs(
+    title = "Contract Profile Analysis",
+    subtitle = "Univariate Percentage Analysis of Contract",
+    y = "Percentage of Total Customers",
+    x = ""
+  ) +
+  theme_minimal() +
+  theme(
+    legend.position = "none",
+    panel.grid.major.x = element_blank(),
+    axis.text.y = element_blank(),
+    panel.grid.major.y = element_blank(),
+    panel.grid.minor.y = element_blank(),
+    panel.spacing = unit(1, "lines"),
+    panel.border = element_rect(color = "#DCDCDC", fill = NA, size = 0.5)
+  )
+
+plot_contract
+```
+
+Month-to-month contracts account for 55% of customers, compared with
+20.9% for one-year contracts and 24.1% for two-year contracts. This
+distribution describes the balance between shorter and longer
+contractual commitments in the customer base.
+
+### 5.5 Billing Profile Analysis
+
+Now, the description of the billing profile through distribution
+analysis of payment methods and paperless billing.
+
+```{r billing-vars-cat, fig.width = 10, fig.height = 8}
+
+billing_long <- customers_univ %>% 
+  select(`Paperless Billing`, `Payment Method`) %>% 
+  pivot_longer(cols = everything(), names_to = "Variable", values_to = "Value") %>% 
+  mutate(Variable = factor(Variable, levels = c("Payment Method", "Paperless Billing")))
+
+plot_billing <- ggplot(billing_long, aes(x = Value, y = after_stat(prop), group = Variable)) +
+  geom_bar(stat = "count", fill = "#104E8B", color = "#27445D", alpha = 0.8, width = 0.6) +
+  geom_text(
+    stat = "count", 
+    aes(label = sprintf("%.1f%%", after_stat(prop) * 100)), 
+    vjust = -0.5, 
+    size = 3.5,
+    fontface = "bold"
+  ) +
+  facet_wrap(~ Variable, scales = "free_x", ncol = 1) + 
+  scale_y_continuous(limits = c(0, 0.7)) +
+  labs(
+    title = "Billing Profile Analysis",
+    subtitle = "Univariate Percentage Analysis of Payment Method and Paperless Billing",
+    y = "Percentage of Total Customers",
+    x = ""
+  ) +
+  theme_minimal() +
+  theme(
+    legend.position = "none",
+    panel.grid.major.x = element_blank(),
+    axis.text.y = element_blank(),
+    panel.grid.major.y = element_blank(),
+    panel.grid.minor.y = element_blank(),
+    panel.spacing = unit(1, "lines"),
+    panel.border = element_rect(color = "#DCDCDC", fill = NA, size = 0.5)
+  )
+
+plot_billing
+```
+
+The payment-method panel describes the relative prevalence of electronic
+checks, mailed checks, automatic bank transfers and automatic
+credit-card payments. Paperless billing is used by 59.2% of customers.
+Electronic checks should not be grouped with automatic payments merely
+because both involve electronic processing. These distributions
+characterize billing arrangements, not payment reliability, customer
+satisfaction or churn risk.
+
+### 5.6 Numeric variables univariate analysis
+
+Continuous numerical indicators require a distinct analytical
+methodology compared to categorical attributes. Instead of counting
+discrete frequencies, we utilize histograms to observe density
+distribution, skewness, modality, and data sparsity across our
+quantitative dimensions: customer subscription life cycle duration
+(`Tenure Months`), monthly overhead rates (`Monthly Charges`),
+cumulative financial commitments (`Total Charges`), and corporate equity
+valuations (`CLTV`).
+
+Two strategic adjustments have been applied to this quantitative
+framework:
+
+1.  **Explicit Units of Measurement**: Because individual variables
+    follow entirely different ranges the global axis title is removed,
+    specific units (Months, \$) are integrated directly into the panel
+    titles.
+
+2.  **Data Discretization (`bins = 30`)**: A uniform structure of 30
+    bins is selected to balance granularity and readability, capturing
+    distribution shapes without introducing random visual noise. The
+    parameter `na.rm = TRUE` safely manages the 11 unestablished
+    accounts within `Total Charges` without crashing the global
+    visualization.
+
+```{r numeric-vars, fig.width = 10, fig.height = 18}
+
+numeric_vars <- customers_univ %>% 
+  select(`Tenure Months`, `Monthly Charges`, `Total Charges`, CLTV)
+
+summary(numeric_vars)
+
+numeric_long <- customers_univ %>% 
+  select( 
+    "Tenure (Months)" = `Tenure Months`, 
+    "Monthly Charges ($)" = `Monthly Charges`, 
+    "Total Charges ($)" = `Total Charges`, 
+    "Customer Lifetime Value" = CLTV
+  ) %>% 
+  pivot_longer(cols = everything(), names_to = "Variable", values_to = "Value") %>% 
+  mutate(Variable = factor(Variable, levels = c(
+    "Tenure (Months)", "Monthly Charges ($)", "Total Charges ($)", "Customer Lifetime Value"
+  )))
+
+plot_numeric <- ggplot(numeric_long, aes(x = Value)) +
+  geom_histogram(fill = "#104E8B", color = "#222222", alpha = 0.8, bins = 30, na.rm = TRUE) +
+  facet_wrap(~ Variable, scales = "free", ncol = 1) + 
+  labs(
+    title = "Distribution of Numeric Variables",
+    subtitle = "Univariate Analysis of Tenure Months, Monthly Charges, Total Charges and CLTV",
+    x = "",
+    y = "Frequency (Count)"
+  ) +
+  theme_minimal() +
+  theme(
+    strip.text = element_text(face = "bold", size = 12), 
+    panel.border = element_rect(color = "#DCDCDC", fill = NA, size = 0.5), 
+    panel.grid.major.x = element_blank(),
+    panel.grid.major.y = element_line(color = "#EAEAEA")
+  )
+
+plot_numeric
+```
+
+The histograms describe four different quantitative dimensions, the
+vertical axis reports customer counts, not probability density.
+
+- Tenure Months measures the duration of the customer relationship. Its
+  median is 29 months, with an interquartile range from 9 to 55 months.
+  This distribution provides context for distinguishing recently
+  acquired customers from customers with longer relationships.
+
+- Monthly Charges describes recurring customer expenditure. The median
+  monthly charge is 70.35\$.
+
+- Total Charges measures accumulated charges rather than recurring
+  expenditure. Its median is 1397.5\$ missing observations are omitted
+  from this histogram only; the corresponding customers are retained for
+  other analyses.
+
+- CLTV denotes customer lifetime value. The median recorded CLTV is
+  4527.
+
+# 6. Multivariate Analysis
+
+Having established the univariate distributions of demographic, billing,
+and services characteristics, we now transition to multivariate
+relationships. Specifically, we investigate how demographic (seniority
+and household segments), contract types, transactional friction (payment
+methods), and technical support and security add-ons interact to
+influence customer churn.
+
+Rather than relying on simple bivariate correlations, we examine
+conditional probabilities and cross-tabulations to uncover underlying
+risk profiles.
+
+### 6.1 Senior status and churn
+
+**Question:** Does observed churn differ between senior and non-senior
+customers, and does this difference remain within contract types?
+
+```{r senior-churn}
+
+senior_churn <- customers %>% 
+  group_by(`Senior Citizen`) %>% 
+  mutate(`Senior Citizen` = factor(`Senior Citizen`, levels = c("Yes", "No"))) %>% 
+  summarise(
+    Customers = n(), 
+    Churned = sum(`Churn Value`), 
+    Churn_rate = 100 * sum(`Churn Value`) / Customers
+  )
+
+ggplot(senior_churn, aes(x = `Senior Citizen`, y = Churn_rate)) +
+  geom_col(fill = "#104E8B", color = "#222222", width = 0.6) +
+  geom_text(
+    aes(label = paste0(round(Churn_rate, 1), "%")),
+    vjust = -0.5, 
+    size = 3.5,
+    fontface = "bold"
+  ) +
+  scale_x_discrete(labels = c("Yes" = "Senior", "No" = "Non-senior")) +
+  scale_y_continuous(limits = c(0, 70)) +
+  labs(title = "Churn by Senior Status", x = "", y = "Churn rate (%)") +
+  theme_minimal() +
+  theme(
+    legend.position = "none",
+    panel.grid.major.x = element_blank(),
+    axis.text.y = element_blank(),
+    panel.grid.major.y = element_blank(),
+    panel.grid.minor.y = element_blank(),
+    panel.spacing = unit(1, "lines"),
+    panel.border = element_rect(color = "#DCDCDC", fill = NA, size = 0.5)
+  )
+```
+
+The chart shows a clear difference in observed churn between senior and
+non-senior customers. The churn rate is 41.7% among senior customers,
+compared with 23.6% among non-senior customers, a difference of 18.1
+percentage points. In relative terms, the observed churn rate among
+seniors is approximately 1.77 times that of non-seniors. Because the
+bars represent churn percentages within each group rather than absolute
+customer counts, the comparison accounts for differences in group size.
+The results indicate that senior customers have a higher observed
+propensity to leave in this dataset.
+
+```{r senior-contract}
+
+# Calculate churn rates by contract type and senior status
+senior_contract_churn <- customers %>%
+  group_by(Contract, `Senior Citizen`) %>%
+  summarise(
+    Customers = n(),
+    Churned = sum(`Churn Value`),
+    Churn_rate = sum(`Churn Value`) / Customers * 100,
+    .groups = "drop"
+  )
+
+# Compare senior and non-senior churn within each contract type
+ggplot(senior_contract_churn, aes(x = Contract, y = Churn_rate, fill = `Senior Citizen`)) +
+  geom_col(color = "#222222", position = position_dodge(width = 0.8), width = 0.7) +
+  geom_text(
+    aes(label = paste0(round(Churn_rate, 1), "%")),
+    position = position_dodge(width = 0.8),
+    vjust = -0.5, 
+    size = 3.5,
+    fontface = "bold"
+  ) +
+  scale_x_discrete(limits = c("Month-to-month", "One year", "Two year")) +
+  scale_fill_manual(
+    values = c("No" = "#104E8B", "Yes" = "#E69F00"),
+    labels = c("No" = "Non-senior", "Yes" = "Senior")
+  ) +
+  scale_y_continuous(limits = c(0, 70)) +
+  labs(
+    title = "Churn by Contract Type and Senior Status",
+    x = "Contract type",
+    y = "Churn rate (%)",
+    fill = "Customer group"
+  ) +
+  theme_minimal() +
+  theme(
+    legend.position = "top",
+    panel.grid.major.x = element_blank(),
+    axis.text.y = element_blank(),
+    panel.grid.major.y = element_blank(),
+    panel.grid.minor.y = element_blank(),
+    panel.spacing = unit(1, "lines"),
+    panel.border = element_rect(color = "#DCDCDC", fill = NA, size = 0.5)
+  )
+```
+
+The chart shows that observed churn varies by both contract type and
+senior status. Month-to-month customers have the highest churn rates in
+both groups: 54.6% among seniors and 39.6% among non-seniors. Churn is
+lower among customers with one-year contracts, at 15.3% and 10.7%,
+respectively, and lowest among those with two-year contracts, at 4.1%
+and 2.7%.
+
+Senior customers exhibit higher observed churn within every contract
+category. However, the absolute gap between senior and non-senior
+customers is largest for month-to-month contracts, at approximately 15.1
+percentage points, compared with 4.6 points for one-year contracts and
+1.4 points for two-year contracts. The senior–non-senior difference
+therefore remains visible after separating customers by contract type,
+although its magnitude varies across categories. Overall, senior
+customers on month-to-month contracts form the segment with the highest
+observed churn rate among the six groups examined.
+
+### 6.2 Partner and dependent status
+
+**Question:** How does churn vary across the four combinations of
+partner and dependent status?
+
+```{r household-churn}
+
+# Calculate churn rates for the four household-status combinations
+household_churn <- customers %>%
+  group_by(Partner, Dependents) %>%
+  summarise(
+    Customers = n(),
+    Churned = sum(`Churn Value`),
+    Churn_rate = sum(`Churn Value`) / Customers * 100,
+    .groups = "drop"
+  )
+
+ggplot(household_churn, aes(x = Partner, y = Churn_rate, fill = Dependents)) +
+  geom_col(color = "#222222", position = position_dodge(width = 0.8), width = 0.7) +
+  geom_text(
+    aes(label = paste0(round(Churn_rate, 1), "%")),
+    position = position_dodge(width = 0.8),
+    vjust = -0.5,
+    size = 3.5,
+    fontface = "bold"
+  ) +
+  scale_x_discrete(labels = c("No" = "No partner", "Yes" = "Partner")) +
+  scale_fill_manual(
+    values = c("No" = "#104E8B", "Yes" = "#E69F00"),
+    labels = c("No" = "No dependents", "Yes" = "Dependents")
+  ) +
+  scale_y_continuous(limits = c(0, 50)) +
+  labs(
+    title = "Churn by Partner and Dependent Status",
+    x = "Partner status",
+    y = "Churn rate (%)",
+    fill = "Dependent status"
+  ) +
+  theme_minimal() +
+  theme(
+    legend.position = "top",
+    panel.grid.major.x = element_blank(),
+    axis.text.y = element_blank(),
+    panel.grid.major.y = element_blank(),
+    panel.grid.minor.y = element_blank(),
+    panel.spacing = unit(1, "lines"),
+    panel.border = element_rect(color = "#DCDCDC", fill = NA, size = 0.5)
+  )
+```
+
+Observed churn varies considerably across the four combinations of
+partner and dependent status. Customers with neither a partner nor
+dependents have the highest churn rate, at 34.4%, followed by customers
+with a partner but no dependents, at 29.5%. Customers with dependents
+but no partner have a lower churn rate of 16.6%, while those with both a
+partner and dependents have the lowest rate, at 4.2%.
+
+The chart shows that having dependents is associated with lower observed
+churn both among customers with a partner and among those without one.
+However, the groups differ in size: the no-partner/with-dependents group
+contains only 302 customers, compared with 3,339 in the
+no-partner/no-dependents group.
+
+```{r household-contract}
+
+# Define household profiles using partner and dependent status
+household_contract_churn <- customers %>%
+  mutate(
+    Household = case_when(
+      Partner == "No"  & Dependents == "No"  ~ "No partner / No dependents",
+      Partner == "No"  & Dependents == "Yes" ~ "No partner / Dependents",
+      Partner == "Yes" & Dependents == "No"  ~ "Partner / No dependents",
+      Partner == "Yes" & Dependents == "Yes" ~ "Partner / Dependents"
+    )
+  ) %>%
+  group_by(Household, Contract) %>%
+  summarise(
+    Customers = n(),
+    Churned = sum(`Churn Value`),
+    Churn_rate = sum(`Churn Value`) / Customers * 100,
+    .groups = "drop"
+  )
+
+ggplot(household_contract_churn, aes(x = Contract, y = Household, fill = Churn_rate)) +
+  geom_tile(color = "white", linewidth = 1) +
+  geom_text(aes(label = paste0(round(Churn_rate, 1), "%\n", "n = ", Customers)), size = 3.5) +
+  scale_x_discrete(limits = c("Month-to-month", "One year", "Two year")) +
+  scale_y_discrete(limits = c(
+    "Partner / Dependents", "Partner / No dependents", 
+    "No partner / Dependents", "No partner / No dependents"
+  )) +
+  scale_fill_gradient(low = "#F7FBFF", high = "#104E8B", limits = c(0, 100)) +
+  labs(
+    title = "Churn by Household Profile and Contract Type",
+    subtitle = "Each cell shows the churn rate and group size",
+    x = "Contract type",
+    y = "Household profile",
+    fill = "Churn rate (%)"
+  ) +
+  theme_minimal() +
+  theme(panel.grid = element_blank()
+  )
+```
+
+The heatmap shows that observed churn varies across both household
+profiles and contract types. Month-to-month contracts have the highest
+churn rate within every household profile. Among month-to-month
+customers, churn is highest for those with a partner but no dependents
+(51.9%), followed by those with neither a partner nor dependents
+(46.2%). The corresponding rates are lower for customers with
+dependents: 26.5% without a partner and 12.5% with a partner.
+
+Separating customers by contract type adds an important qualification to
+the earlier household-level comparison. Although customers with neither
+a partner nor dependents had the highest overall churn rate, customers
+with a partner but no dependents have the highest rate within each
+contract category. This highlights the importance of considering
+contract composition when interpreting differences between household
+profiles. No churn events are recorded among customers with dependents
+on one-year or two-year contracts. These zero rates describe the
+observed sample and should not be interpreted as evidence of zero
+underlying churn risk, particularly for the smaller groups.
+
+### 6.3 Senior status, household profile, internet services and churn
+
+```{r demographic-service}
+
+# Data cleaning & feature engineering
+telco_analysis <- customers |> 
+  mutate(
+    # Recode Age indicator
+   Age_Group = if_else(`Senior Citizen` == "Yes", "Senior", "Non-Senior"),
+    
+    # Recode Household Structure
+    Household = case_when(
+      Partner == "Yes" & Dependents == "Yes" ~ "Partner / Dependents",
+      Partner == "Yes" & Dependents == "No"  ~ "Partner / No dependents",
+      Partner == "No"  & Dependents == "Yes" ~ "No partner / Dependents",
+      Partner == "No"  & Dependents == "No"  ~ "No partner / No dependents"
+    ),
+    
+    # Count of Value-Added Add-on Services (0 to 6)
+    Addon_Services_Count = (`Online Security` == "Yes") + (`Online Backup` == "Yes") + 
+                           (`Device Protection` == "Yes") + (`Tech Support` == "Yes") + 
+                           (`Streaming TV` == "Yes") + (`Streaming Movies` == "Yes")
+  )
+```
+
+The statistical test is a mathematical procedure used to determine
+whether there is sufficient evidence in sample data to reject a null
+hypothesis (H₀), which assumes that there is no effect, relationship, or
+difference in the population.
+
+Hypothesis ($H_0$): Internet service type adoption is independent of
+customer age group.
+
+```{r age-internet}
+
+# TEST A: Chi-Square Test of Independence (Age Group vs Internet Service)
+chisq_age_internet <- chisq.test(table(telco_analysis$Age_Group, telco_analysis$`Internet Service`))
+print(chisq_age_internet)
+
+age_internet_table <- table(
+  telco_analysis$Age_Group,
+  telco_analysis$`Internet Service`
+)
+
+# Calculate percentages within each senior-status group
+age_internet_pct <- as.data.frame(
+  round(prop.table(age_internet_table, margin = 1) * 100, 1)
+)
+names(age_internet_pct) <- c("Age_Group", "Internet_Service", "Percentage")
+age_internet_table
+
+age_internet_pct
+```
+
+Pearson’s chi-squared test indicates a statistically significant
+association between senior status and internet service type, X-squared =
+495.80, p-value \< 2.2 e-16. The null hypothesis of independence is
+therefore rejected.
+
+Within-group percentages show that 72.8% of senior customers subscribe
+to fiber-optic internet, compared with 38.4% of non-senior customers.
+Senior customers have lower proportions of DSL subscriptions (22.7%
+versus 36.6%) and no internet service (4.6% versus 25.0%). These results
+indicate that the two groups differ substantially in their internet
+subscription profiles.
+
+This analysis provides useful context for subsequent churn comparisons:
+differences in internet service composition should be considered when
+examining the higher overall churn observed among senior customers.
+
+```{r age-internet-plot}
+
+ggplot(
+  age_internet_pct,
+  aes(
+    x = Internet_Service,
+    y = Percentage,
+    fill = Age_Group
+  )
+) +
+  geom_col(
+    color = "#222222",
+    position = position_dodge(width = 0.8),
+    width = 0.7
+  ) +
+  geom_text(
+    aes(label = paste0(round(Percentage, 1), "%")),
+    position = position_dodge(width = 0.8),
+    vjust = -0.5,
+    size = 3.5,
+    fontface = "bold"
+  ) +
+  scale_x_discrete(
+    limits = c("DSL", "Fiber optic", "No")
+  ) +
+  scale_fill_manual(
+    values = c("Non-Senior" = "#104E8B", "Senior" = "#E69F00"),
+    labels = c("Non-Senior" = "Non-senior", "Senior" = "Senior")
+  ) +
+  scale_y_continuous(limits = c(0, 100)) +
+  labs(
+    title = "Internet Service Distribution by Senior Status",
+    subtitle = "Percentages calculated within each senior-status group",
+    x = "Internet service",
+    y = "Percentage of customers (%)",
+    fill = "Customer group"
+  ) +
+  theme_minimal()+
+  theme(
+    legend.position = "top",
+    panel.grid.major.x = element_blank(),
+    axis.text.y = element_blank(),
+    panel.grid.major.y = element_blank(),
+    panel.grid.minor.y = element_blank(),
+    panel.spacing = unit(1, "lines"),
+    panel.border = element_rect(color = "#DCDCDC", fill = NA, size = 0.5)
+  )
+
+
+```
+
+```{r senior-internet-churn}
+# Compare churn by senior status and internet service
+senior_internet_churn <- customers |>
+  group_by(`Senior Citizen`, `Internet Service`) |>
+  summarise(
+    Customers = n(),
+    Churn_rate = mean(`Churn Value`) * 100,
+    .groups = "drop"
+  )
+
+senior_internet_churn
+```
+
+The table compares observed churn rates between senior and non-senior
+customers within each internet-service category. Senior customers have a
+higher churn rate than non-senior customers in all three
+internet-service groups. The difference is largest among DSL customers,
+where the churn rate is 30.1% for seniors compared with 17.6% for
+non-seniors, a difference of approximately 12.5 percentage points.
+Fiber-optic customers have the highest observed churn rate in both
+groups: 47.3% among seniors and 39.9% among non-seniors. Customers
+without internet service have the lowest churn rates, at 9.6% among
+seniors and 7.3% among non-seniors. The senior/no-internet group
+contains only 52 customers and five churn events, so its percentage
+should be interpreted with caution. These results suggest that the
+higher overall churn observed among senior customers persists after
+separating customers by internet-service type.
+
+Hypothesis ($H_0$): The distribution of the number of value-added add-on
+services is the same across the four household profiles.
+
+```{r household-addons}
+
+# TEST B: Test whether the distribution of add-on services differs across household profiles
+kruskal_household_addons <- kruskal.test(
+  Addon_Services_Count ~ Household,
+  data = telco_analysis
+)
+kruskal_household_addons
+
+household_addons_summary <- telco_analysis |>
+  group_by(Household) |>
+  summarise(
+    Customers = n(),
+    Mean_Addons = mean(Addon_Services_Count),
+    Median_Addons = median(Addon_Services_Count),
+    .groups = "drop"
+  )
+
+household_addons_summary
+```
+
+```{r household-addons-plot}
+
+blue_palette <- c(
+  "No partner / Dependents"      = "#BDD7E7",
+  "No partner / No dependents"   = "#6BAED6",
+  "Partner / Dependents"         = "#3182BD",
+  "Partner / No dependents"      = "#08519C"
+)
+
+# Display the distribution of add-on services by household profile
+ggplot(
+  telco_analysis,
+  aes(x = Household, y = Addon_Services_Count, fill = Household)
+) +
+  geom_boxplot(
+    outlier.shape = 21,
+    outlier.size = 1.5,
+    show.legend = FALSE
+  ) +
+  stat_summary(
+    fun = mean,
+    geom = "point",
+    shape = 18,
+    size = 3,
+    color = "black"
+  ) +
+  scale_x_discrete(
+    limits = c(
+      "No partner / Dependents",
+      "No partner / No dependents",
+      "Partner / Dependents",
+      "Partner / No dependents"
+    )
+  ) +
+  scale_fill_manual(values = blue_palette) +
+  scale_y_continuous(
+    breaks = 0:6,
+    limits = c(-0.5, 6.5)
+  ) +
+  labs(
+    title = "Number of Value-Added Add-on Services by Household Profile",
+    subtitle = "Diamonds indicate group means; boxes show the median and interquartile range",
+    x = "Household profile",
+    y = "Number of add-on services"
+  ) +
+  theme_minimal() +
+  theme(
+    legend.position = "none",
+    axis.text.x = element_text(angle = 45, hjust = 1)
+  )
+    
+```
+
+The Kruskal-Wallis test indicates that the distribution of the number of
+value-added add-on services differs across household profiles,
+H(3)=358.02, p\<2.2e-16. The null hypothesis of identical distributions
+is therefore rejected.
+
+Customers with a partner but no dependents have the highest mean number
+of add-on services, at 2.65, while customers without a partner but with
+dependents have the lowest mean, at 1.46. Customers with both a partner
+and dependents have an intermediate mean of 2.09, whereas customers with
+neither a partner nor dependents average 1.69 add-on services. The
+boxplot shows the full distribution of the add-on count within each
+household profile, including medians and variability.
+
+```{r}
+# Calculate churn rate by household profile and number of add-on services
+household_addon_churn <- telco_analysis |>
+  dplyr::group_by(Household, Addon_Services_Count) |>
+  dplyr::summarise(
+    Customers = n(),
+    Churn_rate = mean(`Churn Value`) * 100,
+    .groups = "drop"
+  )
+
+# Plot churn by add-on count for each household profile
+ggplot(
+  household_addon_churn,
+  aes(
+    x = Addon_Services_Count,
+    y = Churn_rate,
+    color = Household,
+    group = Household
+  )
+) +
+  geom_line(linewidth = 0.9) +
+  geom_point(size = 2.2) +
+  scale_x_continuous(
+    breaks = 0:6,
+    limits = c(-0.2, 6.2)
+  ) +
+  scale_y_continuous(limits = c(0, 100)) +
+  scale_color_manual(
+    values = c(
+      "No partner / Dependents" = "#9ECAE1",
+      "No partner / No dependents" = "#4292C6",
+      "Partner / Dependents" = "#2171B5",
+      "Partner / No dependents" = "#08519C"
+    )
+  ) +
+  labs(
+    title = "Observed Churn by Household Profile and Add-on Services",
+    subtitle = "Churn rate within each household profile and add-on count",
+    x = "Number of value-added add-on services",
+    y = "Churn rate (%)",
+    color = "Household profile"
+  ) +
+  theme_minimal()+
+  theme(
+    panel.grid.minor.x = element_blank(),
+    panel.grid.minor.y = element_blank(),
+  )
+```
+
+The line chart shows that observed churn generally decreases as the
+number of subscribed value-added add-on services increases within each
+household profile. For example, among customers with a partner but no
+dependents, the churn rate falls from 53.8% among customers with one
+add-on to 6.9% among those with six add-ons. Customers with both a
+partner and dependents have the lowest churn rates across most add-on
+levels. However, some categories contain few customers, so their
+percentages should be interpreted with caution.
+
+### 6.4 Effect of Value-Added Services on Churn
+
+Exploring how services—categorized into Security & Support Services
+(Online Security, Online Backup, Device Protection, Tech Support) and
+Entertainment Services (Streaming TV, Streaming Movies) acts as a
+retention anchor and influences average monthly spending.
+
+```{r services-influence}
+telco_addons <- customers %>%
+  mutate(
+    Security_Support_Count = (`Online Security` == "Yes") + (`Online Backup` == "Yes") + 
+                             (`Device Protection` == "Yes") + (`Tech Support` == "Yes"),
+    Entertainment_Count = (`Streaming TV` == "Yes") + (`Streaming Movies` == "Yes"),
+    Total_Addons = Security_Support_Count + Entertainment_Count,
+    
+    # Create service tier buckets
+ Service_Tier = case_when(
+      `Internet Service` == "No" ~ "No Internet",
+      Total_Addons == 0          ~ "Basic (0 Add-ons)",
+      Total_Addons <= 2          ~ "Moderate (1-2 Add-ons)",
+      TRUE                       ~ "High (3+ Add-ons)"
+    )
+  )
+```
+
+Hypothesis ($H_0$): Customer churn rate is independent of the number of
+value-added services bundled into the contract.
+
+```{r services-test-1}
+
+# TEST A: Chi-Square Test of Independence (Service Tier vs. Churn)
+chisq_tier_churn <- chisq.test(table(telco_addons$Service_Tier, telco_addons$`Churn Label`))
+print(chisq_tier_churn)
+
+```
+
+Hypothesis ($H_0$): Security and technical support services do not have
+a statistically significant protective effect against churn compared to
+entertainment add-ons.
+
+```{r services-test-2}
+
+# TEST B: Logistic Regression to evaluate individual impact of each Add-on Service
+logistic_model <- glm(
+  `Churn Label` == "Yes" ~ `Online Security` + `Online Backup` + `Device Protection` + 
+                           `Tech Support` + `Streaming TV` + `Streaming Movies` + `Monthly Charges`,
+  data = telco_addons %>% filter(`Internet Service` != "No"),
+  family = binomial
+)
+summary(logistic_model)
+
+```
+
+```{r services-test-3}
+
+# Summary Table: Churn and Billing Metrics by Add-on Service Tier
+addon_summary <- telco_addons %>%
+  group_by(Service_Tier) %>%
+  summarise(
+    Customer_Count = n(),
+    Avg_Monthly_Charges = mean(`Monthly Charges`),
+    Avg_Tenure_Months = mean(`Tenure Months`),
+    Churn_Rate_Pct = mean(`Churn Label` == "Yes") * 100,
+    .groups = "drop"
+  )
+
+kable(addon_summary, caption = "Add-On Tier Performance Summary")
+```
+
+```{r services-plot}
+
+# Figure 1: Churn Rate by Add-On Service Tier
+fig_1 <- ggplot(telco_addons, aes(x = Service_Tier, fill = `Churn Label`)) +
+  geom_bar(position = "fill", alpha = 0.9) +
+  scale_y_continuous(labels = scales::percent_format()) +
+  scale_fill_manual(values = c("No" = secondary_color, "Yes" = primary_color)) +
+  theme_minimal() +
+  theme(
+    plot.title = element_text(face = "bold", size = 12),
+    legend.position = "top"
+  ) +
+  labs(
+    title = "Customer Churn Rate Across Value-Added Service Tiers",
+    subtitle = "Analysis of churn risk as customers subscribe to additional services",
+    x = "Service Bundle Complexity Tier",
+    y = "Proportion of Customers",
+    fill = "Churned"
+  )
+
+# Figure 2: Impact of Specific Add-On Services on Churn Probability
+addon_proportions <- telco_addons %>%
+  filter(`Internet Service` != "No") %>%
+  select(
+    `Churn Label`, `Online Security`, `Online Backup`, 
+    `Device Protection`, `Tech Support`, `Streaming TV`, `Streaming Movies`
+  ) %>%
+  pivot_longer(cols = -`Churn Label`, names_to = "Service", values_to = "Status") %>%
+  filter(Status != "No internet service") %>%
+  group_by(Service, Status) %>%
+  summarise(
+    Total = n(),
+    Churned = sum(`Churn Label` == "Yes", na.rm = TRUE),
+    Churn_Rate = (Churned / Total) * 100,
+    .groups = "drop"
+  )
+
+print(fig_1)
+
+fig_2 <- ggplot(addon_proportions, aes(x = reorder(Service, Churn_Rate), y = Churn_Rate, fill = Status)) +
+  geom_bar(stat = "identity", position = "dodge", alpha = 0.9) +
+  scale_fill_manual(values = c("No" = primary_color, "Yes" = secondary_color)) +
+  coord_flip() +
+  theme_minimal() +
+  theme(
+    plot.title = element_text(face = "bold", size = 12),
+    legend.position = "top"
+  ) +
+  labs(
+    title = "Churn Rate Comparison per Specific Value-Added Service",
+    subtitle = "Comparing churn rates between subscribers ('Yes') and non-subscribers ('No')",
+    x = "Value-Added Service",
+    y = "Churn Rate (%)",
+    fill = "Subscribed to Service"
+  )
+
+print(fig_2)
+```
+
+Customers with basic internet and zero add-ons exhibit the highest churn
+rate approximately 40%, whereas customers subscribing to 3 or more
+add-on services show a dramatic reduction in churn (under 15%).
+TechSupport and OnlineSecurity provide the strongest individual
+protective effects against cancellation. Non-subscribers to technical
+support churn at more than double the rate of subscribers. While
+streaming services (StreamingTV and StreamingMovies) increase monthly
+charges, they do not reduce churn as effectively when standalone.
+Security and support services act as foundational "anchors" that lock in
+customer loyalty by increasing switching costs.
+
+### 6.5 Technical support and churn by internet service type
+
+High-cost services often carry higher baseline churn risk due to
+customer sensitivity to pricing and service expectations. We investigate
+whether auxiliary digital security and technical support add-ons can
+mitigate this risk for different internet service.
+
+```{r fiber-support-summary}
+
+fiber_analysis <- customers %>%
+  filter(`Internet Service` != "No") %>%
+  group_by(`Internet Service`, `Tech Support`) %>%
+  summarise(
+    Total_Customers = n(),
+    Churn_Rate = (sum(`Churn Value`) / Total_Customers) * 100,
+    .groups = "drop"
+  )
+
+ggplot(fiber_analysis, aes(x = `Tech Support`, y = Churn_Rate, fill = `Internet Service`)) +
+  geom_col(
+    color = "#222222",
+    position = position_dodge(width = 0.8),
+    width = 0.7
+    ) +
+  geom_text(
+    aes(label = paste0(round(Churn_Rate, 1), "%")),
+    position = position_dodge(width = 0.8),
+    vjust = -0.5,
+    size = 3.5,
+    fontface = "bold"
+  ) +
+  scale_fill_manual(values = c("DSL" = "#104E8B", "Fiber optic" = "#E69F00")) +
+  scale_y_continuous(limits = c(0, 60)) +
+  labs(
+    title = "Churn Rate by Internet Service and Tech Support",
+    x = "Tech Support Subscription",
+    y = "Churn Rate (%)"
+  ) +
+  theme_minimal() +
+  theme(
+    legend.position = "top",
+    panel.grid.major.x = element_blank(),
+    axis.text.y = element_blank(),
+    panel.grid.major.y = element_blank(),
+    panel.grid.minor.y = element_blank(),
+    panel.spacing = unit(1, "lines"),
+    panel.border = element_rect(color = "#DCDCDC", fill = NA, size = 0.5)
+  )
+```
+
+The results highlight a clear pattern: customers subscribing to
+technical support experience significantly lower attrition rates
+compared to those without support. Providing proactive technical
+infrastructure acts as a vital retention buffer for high-value accounts.
+
+### 6.6 Contract Type, Payment Method, and Attrition
+
+We first examine how structural contract flexibility and billing
+mechanisms jointly affect customer retention. Month-to-month contracts
+lack lock-in commitments, while electronic check payment methods
+introduce transactional touchpoints that may increase friction. We
+cross-tabulate contract types and payment methods against the churn
+outcome.
+
+```{r contract-payment-churn}
+
+contract_payment_summary <- customers %>%
+  group_by(Contract, `Payment Method`) %>%
+  summarise(
+    Total_Customers = n(),
+    Churned_Customers = sum(`Churn Value`),
+    Churn_Rate = (Churned_Customers / Total_Customers) * 100,
+    .groups = "drop"
+  ) %>%
+  arrange(desc(Churn_Rate))
+
+kable(contract_payment_summary, caption = "Churn Rate by Contract and Payment Method")
+```
+
+The statistical summary reveals that churn is heavily concentrated among
+customers on month-to-month contracts using electronic check payment
+methods, whereas customers on two-year contracts exhibit minimal
+attrition regardless of billing mechanism.
+
+To visualize this multi-variable relationship clearly without cluttering
+proportions, we construct a faceted bar chart showing churn rates across
+payment methods, split by contract length.
+
+```{r contract-payment-plot}
+ggplot(contract_payment_summary, aes(x = `Payment Method`, y = Churn_Rate, fill = Contract)) +
+  geom_col(
+    color = "#222222",
+    position = position_dodge(width = 0.8),
+    width = 0.7
+  ) +
+  geom_text(
+    aes(label = paste0(round(Churn_Rate, 1), "%")),
+    position = position_dodge(width = 0.8),
+    vjust = -0.5,
+    size = 3.5,
+    fontface = "bold"
+  ) +
+  scale_fill_manual(
+    values = c(
+      "Month-to-month" = "#4292C6",
+      "One year" = "#2171B5",
+      "Two year" = "#08519C")     
+  ) +
+  scale_y_continuous(limits = c(0, 60)) +
+  labs(
+    title = "Churn Rate by Payment Method and Contract Type",
+    x = "Payment Method",
+    y = "Churn Rate (%)",
+    fill = "Contract Type"
+  ) +
+  theme_minimal() +
+  theme(
+    axis.text.x = element_text(angle = 45, hjust = 1),
+    legend.position = "top",
+    panel.grid.major.x = element_blank(),
+    axis.text.y = element_blank(),
+    panel.grid.major.y = element_blank(),
+    panel.grid.minor.y = element_blank(),
+    panel.spacing = unit(1, "lines"),
+    panel.border = element_rect(color = "#DCDCDC", fill = NA, size = 0.5)
+  )
+
+```
+
+The visualization demonstrates that electronic check users on
+month-to-month contracts experience churn rates exceeding 40%, whereas
+long-term contract structures successfully insulate the firm against
+payment-method-induced attrition.
+
+### 6.7 Payment Methods and Electronic Invoicing
+
+Explore whether customers using automatic payments (bank transfer/credit
+card) have lower churn compared to those who pay via electronic check.
+
+```{r payment-and-billing-influence}
+# Categorize Payment Channels into Automatic vs. Manual
+telco_payments <- customers %>%
+  mutate(
+    Payment_Type = if_else(
+      grepl("automatic", `Payment Method`, ignore.case = TRUE),
+      "Automatic Payment",
+      "Manual Payment"
+    ),
+    PaymentMethod_Clean = case_when(
+      `Payment Method` == "Electronic check" ~ "Electronic Check",
+      `Payment Method` == "Mailed check" ~ "Mailed Check",
+      `Payment Method` == "Bank transfer (automatic)" ~ "Bank Transfer (Auto)",
+      `Payment Method` == "Credit card (automatic)" ~ "Credit Card (Auto)"
+    )
+  )
+```
+
+Hypothesis ($H_0$): Customer churn is independent of the payment channel
+selected.
+
+```{r payment-and-billing-test-1}
+
+# TEST A: Chi-Square Test of Independence (Payment Method vs. Churn)
+chisq_payment_churn <- chisq.test(table(telco_payments$PaymentMethod_Clean, telco_payments$`Churn Label`))
+print(chisq_payment_churn)
+
+```
+
+Hypothesis ($H_0$): Adopting paperless billing (PaperlessBilling =
+"Yes") has no significant association with customer attrition rates.
+
+```{r payment-and-billing-test-2}
+
+# TEST B: Chi-Square Test of Independence (Paperless Billing vs. Churn)
+chisq_paperless_churn <- chisq.test(table(telco_payments$`Paperless Billing`, telco_payments$`Churn Label`))
+print(chisq_paperless_churn)
+
+# Test C: Wilcoxon Rank-Sum Test (Monthly Charges across Automatic vs. Manual Payments)
+wilcox_charges_payment <- wilcox.test(`Monthly Charges` ~ Payment_Type, data = telco_payments)
+print(wilcox_charges_payment)
+
+# Summary Table: Churn and Billing Metrics by Payment Method and Invoicing Choice
+payment_summary <- telco_payments %>%
+  group_by(PaymentMethod_Clean, `Paperless Billing`) %>%
+  summarise(
+    Customer_Count = n(),
+    Avg_Monthly_Charges = mean(`Monthly Charges`),
+    Avg_Tenure_Months = mean(`Tenure Months`),
+    Churn_Rate_Pct = mean(`Churn Label` == "Yes") * 100,
+    .groups = "drop"
+  )
+
+kable(payment_summary, caption = "Payment Summary Metrics")
+```
+
+```{r payment-and-billing-plot}
+
+# Figure 1: Churn Rate by Payment Method and Paperless Invoicing
+figA <- ggplot(telco_payments, aes(x = PaymentMethod_Clean, fill = `Churn Label`)) +
+  geom_bar(position = "fill", alpha = 0.9) +
+  facet_wrap(~ `Paperless Billing`, labeller = labeller(`Paperless Billing` = c("No" = "Paper Invoicing", "Yes" = "Paperless Invoicing"))) +
+  scale_y_continuous(labels = scales::percent_format()) +
+  scale_fill_manual(values = c("No" = secondary_color, "Yes" = primary_color)) +
+  theme_minimal() +
+  theme(
+    axis.text.x = element_text(angle = 45, hjust = 1),
+    plot.title = element_text(face = "bold", size = 12),
+    legend.position = "top"
+  ) +
+  labs(
+    title = "Figure 5: Churn Rate Across Payment Methods and Invoicing Types",
+    subtitle = "Comparing Electronic and Paperless options against traditional billing",
+    x = "Payment Method",
+    y = "Proportion of Customers",
+    fill = "Churned"
+  )
+
+print(figA)
+
+# Figure: Monthly Charges vs. Tenure by Payment Automation Type
+figB <- ggplot(telco_payments, aes(x = `Tenure Months`, y = `Monthly Charges`, color = Payment_Type)) +
+  geom_point(alpha = 0.3, size = 1.2) +
+  geom_smooth(method = "loess", se = FALSE, size = 1.2) +
+  scale_color_manual(values = c("Automatic Payment" = secondary_color, "Manual Payment" = primary_color)) +
+  theme_minimal() +
+  theme(
+    plot.title = element_text(face = "bold", size = 12),
+    legend.position = "top"
+  ) +
+  labs(
+    title = "Figure 6: Spending Trajectory and Tenure by Payment Automation",
+    subtitle = "Evaluating how automatic payment adoption correlates with long-term retention",
+    x = "Tenure (Months)",
+    y = "Monthly Charges ($)",
+    color = "Payment Channel Type"
+  )
+
+print(figB)
+```
+
+Customers paying via Electronic Check exhibit an exceptionally high
+churn rate approximately 45%, significantly outperforming all other
+payment channels in attrition risk. Electronic billing increases price
+visibility and invoice awareness, prompting price-sensitive customers to
+evaluate alternative competitors when rates fluctuate.
+
+### 6.8 Tenure Milestones and Customer Lifetime Value
+
+Finally, we examine how customer tenure influences estimated Customer
+Lifetime Value (CLTV) across churned versus retained customers.
+Understanding how financial value accumulates over time helps management
+identify critical retention milestones during the customer lifecycle.
+
+```{r tenure-cltv-summary}
+
+tenure_cltv_summary <- customers %>%
+  group_by(`Churn Label`) %>%
+  summarise(
+    Mean_Tenure = mean(`Tenure Months`),
+    Mean_CLTV = mean(CLTV, na.rm = TRUE),
+    Total_Customers = n(),
+    .groups = "drop"
+  )
+
+kable(tenure_cltv_summary, caption = "Tenure and CLTV Summary")
+
+ggplot(customers, aes(x = `Tenure Months`, y = CLTV, color = `Churn Label`)) +
+  geom_point(alpha = 0.5, size = 1.5) +
+  scale_color_manual(values = c("No" = primary_color, "Yes" = secondary_color)) +
+  labs(
+    title = "Customer Lifetime Value vs. Tenure Months by Churn Status",
+    x = "Tenure Months",
+    y = "Estimated CLTV",
+    color = "Churned"
+  ) +
+  theme_minimal()
+```
+
+The scatter plot demonstrates that retained customers generally achieve
+longer tenure spans and cluster at higher lifetime values, whereas
+churned customers predominantly exit early in their subscription
+lifecycle when cumulative value and engagement are low.
+
+# 7. Findings and Company Suggestions
+
+### 7.1 Main findings
+
+The analysis shows that customer churn is not evenly distributed across
+customer segments. Overall, 26.5% of customers churned, while 73.5%
+remained with the company. This overall rate provides the reference
+against which the segment-level results should be interpreted.
+
+Senior customers have a higher observed churn rate than non-senior
+customers: 41.7% compared with 23.6%. This difference remains visible
+within every contract type, although its size varies. The largest gap
+occurs among month-to-month customers, where senior customers churn at
+54.6% and non-senior customers at 39.6%. These results indicate that
+senior status is associated with higher observed churn, but they do not
+establish that senior status causes customers to leave.
+
+Contract type is strongly associated with observed churn. Month-to-month
+customers show the highest churn rates across household profiles and
+senior-status groups, whereas customers with two-year contracts show the
+lowest rates. This pattern is consistent with the idea that longer
+contractual commitments are associated with greater customer retention,
+although the observational nature of the data does not allow a causal
+conclusion.
+
+Household composition also matters. Customers with both a partner and
+dependents have the lowest observed churn rate, at 4.2%, while customers
+with neither a partner nor dependents have the highest rate, at 34.4%.
+However, when household profiles are examined jointly with contract
+type, customers with a partner but no dependents show the highest churn
+rate within each contract category. This shows that the relationship
+between household characteristics and churn should not be interpreted
+using aggregate percentages alone.
+
+Internet service type is another relevant dimension. Senior customers
+are more likely than non-senior customers to subscribe to fiber-optic
+internet, while non-senior customers are more likely to have DSL or no
+internet service. Fiber-optic customers have the highest observed churn
+rate within both senior-status groups. Therefore, the higher overall
+churn among senior customers should be interpreted alongside their
+different service composition.
+
+### 7.2 Service adoption and churn
+
+The number of subscribed add-on services is associated with observed
+churn. Among internet customers, those with no add-on services have the
+highest churn rate, while customers with three or more add-ons have a
+lower observed rate. Technical support is associated with a particularly
+large difference: among fiber-optic customers, the churn rate is 49.4%
+without technical support and 22.6% with technical support. A similar
+pattern appears among DSL customers.
+
+These findings suggest that security and support services may be
+relevant to retention, but the analysis does not prove that subscribing
+to an add-on causes customers to remain. Customers who choose these
+services may also differ in contract type, tenure, monthly charges or
+overall engagement. The relationship between add-on adoption and churn
+should therefore be treated as exploratory.
+
+### 7.3 Billing and payment patterns
+
+Churn is concentrated among customers on month-to-month contracts who
+pay by electronic check. This group has an observed churn rate of 53.7%,
+the highest among the contract and payment-method combinations examined.
+By contrast, customers on two-year contracts show low churn rates across
+payment methods.
+
+Paperless billing is also associated with higher observed churn within
+each payment-method category. However, this association does not
+demonstrate that electronic invoicing causes customers to leave. It may
+reflect differences in customer profiles, contract types, tenure or
+payment preferences. The results identify electronic-check customers on
+month-to-month contracts as a segment that deserves further
+investigation, rather than proving that paperless billing itself is a
+churn driver.
+
+### 7.4 Tenure and customer value
+
+Retained customers have a longer average tenure than churned customers:
+37.6 months compared with 18.0 months. They also have a higher average
+recorded CLTV, at 4,490.9 compared with 4,149.4. These results are
+consistent with the idea that customers who remain longer accumulate
+more value over time.
+
+However, the analysis does not establish the direction of this
+relationship. Customers may churn early because they have not yet
+developed a long relationship with the company, or early churn may
+simply reduce the time available for value accumulation. The results
+should therefore be interpreted as descriptive rather than causal.
+
+### 7.5 Company suggestions
+
+The findings suggest several areas for further investigation and
+targeted retention activity.
+
+First, month-to-month customers who pay by electronic check represent
+the segment with the highest observed churn rate. The company should
+investigate their service experience, billing preferences and contract
+renewal behaviour before designing an intervention. Encouraging a move
+toward automatic payment methods may be worth testing, but its effect on
+retention should be evaluated through a controlled pilot rather than
+assumed from this observational analysis.
+
+Second, senior customers on month-to-month contracts are a high-priority
+segment. They combine higher observed churn with shorter contractual
+commitments. The company should examine whether their needs differ in
+terms of service reliability, billing clarity or technical assistance,
+rather than assuming that age alone explains their churn.
+
+Third, technical support and security-related add-ons appear associated
+with lower observed churn, particularly among fiber-optic customers. A
+practical next step would be to test whether offering technical support
+during the early months of a fiber-optic subscription improves
+retention. Any such initiative should be evaluated against a comparison
+group.
+
+Finally, the company should avoid treating the observed associations as
+proof of causation. The analysis identifies customer segments and
+service patterns associated with higher or lower churn, but further
+modelling, customer feedback and controlled experiments would be needed
+to understand why customers leave and which retention actions are
+effective.
